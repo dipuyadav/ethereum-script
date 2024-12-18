@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# Script to install Ethereum Mainnet with Geth and Prysm on Ubuntu
+
+# Set working directory
+WORK_DIR="/data"
+LOG_DIR="/var/log"
+GETH_TAR="geth-linux-amd64-1.14.8-a9523b64.tar.gz"
+GETH_DIR="geth-linux-amd64-1.14.8-a9523b64"
+
+# Step 1: Install Geth binary
+echo "Installing Geth binary..."
+wget https://gethstore.blob.core.windows.net/builds/$GETH_TAR
+tar -xvf $GETH_TAR -C $WORK_DIR
+
+# Step 2: Download Prysm script
+echo "Downloading Prysm script..."
+wget https://raw.githubusercontent.com/prysmaticlabs/prysm/develop/prysm.sh -O $WORK_DIR/prysm.sh
+chmod +x $WORK_DIR/prysm.sh
+
+# Step 3: Generate auth file (JWT file)
+echo "Generating auth file..."
+$WORK_DIR/prysm.sh beacon-chain generate-auth-secret --data-dir=$WORK_DIR
+
+# Step 4: Create systemd service files
+echo "Creating systemd service files..."
+
+# Prysm service
+cat <<EOF >/etc/systemd/system/prysm.service
+[Unit]
+Description=Ethereum 2.0 Prysm Beacon Chain
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$WORK_DIR
+ExecStart=$WORK_DIR/prysm.sh beacon-chain --execution-endpoint=http://localhost:8551 --jwt-secret=$WORK_DIR/jwt.hex --accept-terms-of-use --checkpoint-sync-url=https://mainnet-checkpoint-sync.stakely.io --genesis-beacon-api-url=https://mainnet-checkpoint-sync.stakely.io
+StandardOutput=append:$LOG_DIR/prysm.log
+StandardError=append:$LOG_DIR/prysm.log
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Geth service
+cat <<EOF >/etc/systemd/system/eth.service
+[Unit]
+Description=Ethereum Geth Mainnet Node
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$WORK_DIR
+ExecStart=$WORK_DIR/$GETH_DIR/geth --mainnet --http --http.api eth,net,engine,admin,personal --http.rpcprefix=/ --http.corsdomain= --http.addr 0.0.0.0 --ws --ipcdisable --datadir=$WORK_DIR/ethereum --ws.addr 0.0.0.0 --ws.origins= --authrpc.jwtsecret=$WORK_DIR/jwt.hex --authrpc.port 8551 --authrpc.vhosts="*" --http.vhosts="*"
+StandardOutput=append:$LOG_DIR/geth.log
+StandardError=append:$LOG_DIR/geth.log
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Step 5: Reload systemd and create Ethereum data directory
+echo "Reloading systemd and creating Ethereum data directory..."
+systemctl daemon-reload
+mkdir -p $WORK_DIR/ethereum
+
+# Step 6: Start services
+echo "Starting Prysm and Geth services..."
+systemctl start prysm.service
+systemctl start eth.service
+
+# Enable services to start on boot
+systemctl enable prysm.service
+systemctl enable eth.service
+
+echo "Ethereum mainnet setup completed successfully!"
